@@ -20,6 +20,9 @@ TEST(TimeTest, Format) {
   tm.tm_mday = 25;
   EXPECT_EQ("The date is 2016-04-25.",
             fmt::format("The date is {:%Y-%m-%d}.", tm));
+  auto ts = fmt::systemtime_now();
+  auto wstr = fmt::format(L"{}", ts);
+  auto str = fmt::format("{}", ts);
 }
 
 TEST(TimeTest, GrowBuffer) {

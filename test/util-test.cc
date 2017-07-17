@@ -422,7 +422,7 @@ ARG_INFO(BOOL, int, int_value);
 ARG_INFO(CHAR, int, int_value);
 ARG_INFO(DOUBLE, double, double_value);
 ARG_INFO(LONG_DOUBLE, long double, long_double_value);
-ARG_INFO(CSTRING, const char *, string.value);
+// ARG_INFO(CSTRING, const char *, string.value);
 ARG_INFO(STRING, const char *, string.value);
 ARG_INFO(WSTRING, const wchar_t *, wstring.value);
 ARG_INFO(POINTER, const void *, pointer);

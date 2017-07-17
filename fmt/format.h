@@ -57,6 +57,9 @@
 
 #ifdef _MSC_VER
 # define FMT_MSC_VER _MSC_VER
+#ifndef FMT_MSC_CODEPAGE
+# define FMT_MSC_CODEPAGE 65001
+#endif
 #else
 # define FMT_MSC_VER 0
 #endif
@@ -558,6 +561,12 @@ class BasicStringRef {
 
 typedef BasicStringRef<char> StringRef;
 typedef BasicStringRef<wchar_t> WStringRef;
+
+#if FMT_MSC_VER
+// Add multiByte string convert functions
+FMT_API std::wstring convert(StringRef s, long codepage = FMT_MSC_CODEPAGE) FMT_NOEXCEPT;
+FMT_API std::string convert(WStringRef s, long codepage = FMT_MSC_CODEPAGE) FMT_NOEXCEPT;
+#endif
 
 /**
   \rst
@@ -1120,7 +1129,11 @@ struct Value {
     INT, UINT, LONG_LONG, ULONG_LONG, BOOL, CHAR, LAST_INTEGER_TYPE = CHAR,
     // followed by floating-point types.
     DOUBLE, LONG_DOUBLE, LAST_NUMERIC_TYPE = LONG_DOUBLE,
+#if FMT_MSC_VER
+    STRING, CSTRING = STRING, STRINGr, WSTRING, WSTRINGr, POINTER, CUSTOM
+#else
     CSTRING, STRING, WSTRING, POINTER, CUSTOM
+#endif
   };
 };
 
@@ -1140,17 +1153,31 @@ struct Null {};
 
 // A helper class template to enable or disable overloads taking wide
 // characters and strings in MakeValue.
-template <typename T, typename Char>
-struct WCharHelper {
-  typedef Null<T> Supported;
-  typedef T Unsupported;
-};
+template <typename CharType, typename InCharMode,typename T = CharType> 
+struct CharMode;
+
+template <typename T = void> struct CharInChar {};
+template <typename T = void> struct CharInWChar {};
+template <typename T = void> struct WCharInChar {};
+template <typename T = void> struct WCharInWChar {};
 
 template <typename T>
-struct WCharHelper<T, wchar_t> {
-  typedef T Supported;
-  typedef Null<T> Unsupported;
+struct CharMode<char, char, T> {
+  typedef typename CharInChar<T> NullType;
 };
+template <typename T>
+struct CharMode<char, wchar_t, T> {
+  typedef typename CharInWChar<T> NullType;
+};
+template <typename T>
+struct CharMode<wchar_t, char, T> {
+  typedef typename WCharInChar<T> NullType;
+};
+template <typename T>
+struct CharMode<wchar_t, wchar_t, T> {
+  typedef typename WCharInWChar<T> NullType;
+};
+
 
 typedef char Yes[1];
 typedef char No[2];
@@ -1223,6 +1250,58 @@ template <typename T, T> struct LConvCheck {
   LConvCheck(int) {}
 };
 
+template <typename T, typename U> 
+struct IsSame : Not<true> {};
+template <typename T> 
+struct IsSame<T, T> : Not<false> {};
+
+template<typename T>
+struct RemoveReference {
+  typedef T type;
+};
+
+template<typename T>
+struct RemoveReference<T&> {
+  typedef T type;
+};
+
+template<typename T>
+struct RemoveReference<T&&> {
+  typedef T type;
+};
+
+template<typename T>
+struct RemoveConst {
+  typedef T type;
+};
+
+template<typename T>
+struct RemoveConst<const T> {
+  typedef T type;
+};
+
+template<typename T>
+struct RemoveVolatile {
+  typedef T type;
+};
+
+template<typename T>
+struct RemoveVolatile<volatile T> {
+  typedef T type;
+};
+
+template<typename T>
+struct RemoveCV {
+  typedef typename RemoveConst<typename RemoveVolatile<T>::type>::type type;
+};
+
+template<typename T>
+struct RemoveCVR {
+  typedef typename RemoveConst<
+              typename RemoveVolatile<typename RemoveReference<T>::type>::type
+          >::type type;
+};
+
 // Returns the thousands separator for the current locale.
 // We check if ``lconv`` contains ``thousands_sep`` because on Android
 // ``lconv`` is stubbed as an empty struct.
@@ -1269,28 +1348,13 @@ class MakeValue : public Arg {
  public:
   typedef typename Formatter::Char Char;
 
- private:
-  // The following two methods are private to disallow formatting of
-  // arbitrary pointers. If you want to output a pointer cast it to
-  // "void *" or "const void *". In particular, this forbids formatting
-  // of "[const] volatile char *" which is printed as bool by iostreams.
-  // Do not implement!
-  template <typename T>
-  MakeValue(const T *value);
-  template <typename T>
-  MakeValue(T *value);
+  template <class CharType, class CharModeType, class T = CharType>
+  using FilterModeType = 
+      typename internal::Conditional<
+      internal::IsSame<CharModeType, Char>::value, 
+      T, typename internal::CharMode<CharType,CharModeType,T >::NullType >::type;
 
-  // The following methods are private to disallow formatting of wide
-  // characters and strings into narrow strings as in
-  //   fmt::format("{}", L"test");
-  // To fix this, use a wide format string: fmt::format(L"{}", L"test").
-#if !FMT_MSC_VER || defined(_NATIVE_WCHAR_T_DEFINED)
-  MakeValue(typename WCharHelper<wchar_t, Char>::Unsupported);
-#endif
-  MakeValue(typename WCharHelper<wchar_t *, Char>::Unsupported);
-  MakeValue(typename WCharHelper<const wchar_t *, Char>::Unsupported);
-  MakeValue(typename WCharHelper<const std::wstring &, Char>::Unsupported);
-  MakeValue(typename WCharHelper<WStringRef, Char>::Unsupported);
+ private:
 
   void set_string(StringRef str) {
     string.value = str.data();
@@ -1359,37 +1423,74 @@ class MakeValue : public Arg {
   FMT_MAKE_VALUE(unsigned char, uint_value, UINT)
   FMT_MAKE_VALUE(char, int_value, CHAR)
 
-#if !defined(_MSC_VER) || defined(_NATIVE_WCHAR_T_DEFINED)
-  MakeValue(typename WCharHelper<wchar_t, Char>::Supported value) {
-    int_value = value;
-  }
-  static uint64_t type(wchar_t) { return Arg::CHAR; }
-#endif
 
-#define FMT_MAKE_STR_VALUE(Type, TYPE) \
-  MakeValue(Type value) { set_string(value); } \
-  static uint64_t type(Type) { return Arg::TYPE; }
+  MakeValue(typename FilterModeType<wchar_t,wchar_t> value) {int_value = value;}
+  static uint64_t type(typename FilterModeType<wchar_t, wchar_t>) { return Arg::CHAR; }
+  MakeValue(typename FilterModeType<wchar_t, char> value) { int_value = value; }
+  static uint64_t type(typename FilterModeType<wchar_t, char>) { return Arg::CHAR; }
 
-  FMT_MAKE_VALUE(char *, string.value, CSTRING)
-  FMT_MAKE_VALUE(const char *, string.value, CSTRING)
-  FMT_MAKE_VALUE(signed char *, sstring.value, CSTRING)
-  FMT_MAKE_VALUE(const signed char *, sstring.value, CSTRING)
-  FMT_MAKE_VALUE(unsigned char *, ustring.value, CSTRING)
-  FMT_MAKE_VALUE(const unsigned char *, ustring.value, CSTRING)
-  FMT_MAKE_STR_VALUE(const std::string &, STRING)
-  FMT_MAKE_STR_VALUE(StringRef, STRING)
-  FMT_MAKE_VALUE_(CStringRef, string.value, CSTRING, value.c_str())
+#define FMT_MAKE_VALUE_CHARSTR_(formatType,templateType,argType,enumType) \
+  MakeValue(typename FilterModeType<formatType, templateType, argType> value, size_t N) { string.value = value; string.size = value?N:0; }\
+  MakeValue(typename FilterModeType<formatType, templateType, argType> value) { \
+   string.value = reinterpret_cast<const formatType*>(value); string.size = value?std::strlen(reinterpret_cast<const formatType*>(value)):0; }\
+  static uint64_t type(typename FilterModeType<formatType, templateType, argType>) { return enumType; }
+  
+  /*
+#define FMT_MAKE_VALUE_R_(formatType,templateType,argType,enumType) \
+  MakeValue(typename FilterModeType<formatType, templateType, argType> value, size_t N) { string.value = value; string.size = N; }\
+  MakeValue(typename FilterModeType<formatType, templateType, argType> value) { string.value = value; string.size = min(std::strlen((const char*)value), N); }\
+  static uint64_t type(typename FilterModeType<formatType, templateType, argType>) { return enumType; }
+  */
 
-#define FMT_MAKE_WSTR_VALUE(Type, TYPE) \
-  MakeValue(typename WCharHelper<Type, Char>::Supported value) { \
-    set_string(value); \
-  } \
-  static uint64_t type(Type) { return Arg::TYPE; }
+  FMT_MAKE_VALUE_CHARSTR_(char, char,char*, Arg::STRING);
+  FMT_MAKE_VALUE_CHARSTR_(char, char, const char*, Arg::STRING);
+  FMT_MAKE_VALUE_CHARSTR_(char, wchar_t, char*, Arg::STRINGr);
+  FMT_MAKE_VALUE_CHARSTR_(char, wchar_t, const char*, Arg::STRINGr);
 
-  FMT_MAKE_WSTR_VALUE(wchar_t *, WSTRING)
-  FMT_MAKE_WSTR_VALUE(const wchar_t *, WSTRING)
-  FMT_MAKE_WSTR_VALUE(const std::wstring &, WSTRING)
-  FMT_MAKE_WSTR_VALUE(WStringRef, WSTRING)
+  FMT_MAKE_VALUE_CHARSTR_(char, char, signed char*, Arg::STRING);
+  FMT_MAKE_VALUE_CHARSTR_(char, char, const signed char*, Arg::STRING);
+  FMT_MAKE_VALUE_CHARSTR_(char, wchar_t, signed char*, Arg::STRINGr);
+  FMT_MAKE_VALUE_CHARSTR_(char, wchar_t, const signed char*, Arg::STRINGr);
+
+  FMT_MAKE_VALUE_CHARSTR_(char, char, unsigned char*, Arg::STRING);
+  FMT_MAKE_VALUE_CHARSTR_(char, char, const unsigned char*, Arg::STRING);
+  FMT_MAKE_VALUE_CHARSTR_(char, wchar_t, unsigned char*, Arg::STRINGr);
+  FMT_MAKE_VALUE_CHARSTR_(char, wchar_t, const unsigned char*, Arg::STRINGr);
+
+  MakeValue(typename FilterModeType<char, char, CStringRef> value) { string.value = value.c_str(); string.size = std::strlen(value.c_str()); }
+  static uint64_t type(typename FilterModeType<char, char, CStringRef>) { return Arg::STRING; }
+  MakeValue(typename FilterModeType<char, wchar_t, CStringRef> value) { string.value = value.c_str(); string.size = std::strlen(value.c_str()); }
+  static uint64_t type(typename FilterModeType<char, wchar_t, CStringRef>) { return Arg::STRINGr; }
+
+  MakeValue(typename FilterModeType<char, char, StringRef> value) { set_string(value); }
+  static uint64_t type(typename FilterModeType<char, char, StringRef>) { return Arg::STRING; }
+  MakeValue(typename FilterModeType<char, wchar_t, StringRef> value) { set_string(value); }
+  static uint64_t type(typename FilterModeType<char, wchar_t, StringRef>) { return Arg::STRINGr; }
+
+  MakeValue(typename FilterModeType<char, char, const std::string &> value) { set_string(value); }
+  static uint64_t type(typename FilterModeType<char, char, const std::string &>) { return Arg::STRING; }
+  MakeValue(typename FilterModeType<char, wchar_t, const std::string &> value) { set_string(value); }
+  static uint64_t type(typename FilterModeType<char, wchar_t, const std::string &>) { return Arg::STRINGr; }
+
+  MakeValue(typename FilterModeType<wchar_t,wchar_t,wchar_t*> value) { set_string(value); }
+  static uint64_t type(typename FilterModeType<wchar_t, wchar_t, wchar_t*>) { return Arg::WSTRING; }
+  MakeValue(typename FilterModeType<wchar_t, char, wchar_t*> value) { set_string(value); }
+  static uint64_t type(typename FilterModeType<wchar_t, char, wchar_t*>) { return Arg::WSTRINGr; }
+
+  MakeValue(typename FilterModeType<wchar_t, wchar_t, const wchar_t*> value) { set_string(value); }
+  static uint64_t type(typename FilterModeType<wchar_t, wchar_t, const wchar_t*>) { return Arg::WSTRING; }
+  MakeValue(typename FilterModeType<wchar_t, char, const wchar_t*> value) { set_string(value); }
+  static uint64_t type(typename FilterModeType<wchar_t, char, const wchar_t*>) { return Arg::WSTRINGr; }
+
+  MakeValue(typename FilterModeType<wchar_t, wchar_t, const std::wstring &> value) { set_string(value); }
+  static uint64_t type(typename FilterModeType<wchar_t, wchar_t, const std::wstring &>) { return Arg::WSTRING; }
+  MakeValue(typename FilterModeType<wchar_t, char, const std::wstring &> value) { set_string(value); }
+  static uint64_t type(typename FilterModeType<wchar_t, char, const std::wstring &>) { return Arg::WSTRINGr; }
+
+  MakeValue(typename FilterModeType<wchar_t, wchar_t, WStringRef> value) { set_string(value); }
+  static uint64_t type(typename FilterModeType<wchar_t, wchar_t, WStringRef>) { return Arg::WSTRING; }
+  MakeValue(typename FilterModeType<wchar_t, char, WStringRef> value) { set_string(value); }
+  static uint64_t type(typename FilterModeType<wchar_t, char, WStringRef>) { return Arg::WSTRINGr; }
 
   FMT_MAKE_VALUE(void *, pointer, POINTER)
   FMT_MAKE_VALUE(const void *, pointer, POINTER)
@@ -1419,6 +1520,28 @@ class MakeValue : public Arg {
   static uint64_t type(const NamedArg<Char_> &) { return Arg::NAMED_ARG; }
   template <typename Char_, typename T>
   static uint64_t type(const NamedArgWithType<Char_, T> &) { return Arg::NAMED_ARG; }
+  template<typename T>
+  inline static MakeValue MakeValueImpl(std::false_type, const T& value)   {
+      return MakeValue(value);
+  }
+
+  template<typename T>
+  inline static MakeValue MakeValueImpl(std::true_type, const T& value)   {
+      return MakeValue(value);
+  }
+
+  template<typename T>
+  inline static MakeValue MakeValueHelper(const T& value)   {
+      using ele_type = std::decay_t<T>;
+      using my_type = std::conditional_t<
+          std::is_array<T>::value && (
+          std::is_same<ele_type, char*>::value |
+          std::is_same<ele_type, unsigned char*>::value |
+          std::is_same<ele_type, signed char*>::value |
+          std::is_same<ele_type, wchar_t*>::value),
+          std::true_type, std::false_type>;
+      return MakeValueImpl(my_type{}, value);
+  }
 };
 
 template <typename Formatter>
@@ -1565,10 +1688,12 @@ class ArgVisitor {
  public:
   void report_unhandled_arg() {}
 
+#pragma warning(disable:4702) // make compiler happy.
   Result visit_unhandled_arg() {
     FMT_DISPATCH(report_unhandled_arg());
     return Result();
   }
+#pragma warning(default:4702)
 
   /** Visits an ``int`` argument. **/
   Result visit_int(int value) {
@@ -1646,6 +1771,14 @@ class ArgVisitor {
   Result visit_custom(Arg::CustomValue) {
     return FMT_DISPATCH(visit_unhandled_arg());
   }
+  
+  Result visit_stdstring(const std::string&) {
+    return FMT_DISPATCH(visit_unhandled_arg());
+  }
+  
+  Result visit_stdwstring(const std::wstring&) {
+    return FMT_DISPATCH(visit_unhandled_arg());
+  }
 
   /**
     \rst
@@ -1677,8 +1810,15 @@ class ArgVisitor {
       return FMT_DISPATCH(visit_double(arg.double_value));
     case Arg::LONG_DOUBLE:
       return FMT_DISPATCH(visit_long_double(arg.long_double_value));
+#if FMT_MSC_VER
+    case Arg::STRINGr:
+      return FMT_DISPATCH(visit_stdwstring(fmt::convert(StringRef(arg.string.value, arg.string.size))));
+    case Arg::WSTRINGr:
+      return FMT_DISPATCH(visit_stdstring(fmt::convert(WStringRef(arg.wstring.value, arg.wstring.size))));
+ #else
     case Arg::CSTRING:
       return FMT_DISPATCH(visit_cstring(arg.string.value));
+#endif
     case Arg::STRING:
       return FMT_DISPATCH(visit_string(arg.string));
     case Arg::WSTRING:
@@ -1973,6 +2113,11 @@ class ArgFormatterBase : public ArgVisitor<Impl, void> {
     writer_.write_str(str, spec_);
   }
 
+  void write(const wchar_t *value) {
+    Arg::StringValue<wchar_t> str = { value, value ? std::wcslen(value) : 0 };
+    writer_.write_str(str, spec_);
+  }
+
  public:
   typedef Spec SpecType;
 
@@ -2031,13 +2176,27 @@ class ArgFormatterBase : public ArgVisitor<Impl, void> {
 
   // Qualification with "internal" here and below is a workaround for nvcc.
   void visit_string(internal::Arg::StringValue<char> value) {
+    if (spec_.type_ == 'p')
+      return write_pointer(value.value);
     writer_.write_str(value, spec_);
   }
 
   using ArgVisitor<Impl, void>::visit_wstring;
 
   void visit_wstring(internal::Arg::StringValue<Char> value) {
+    if (spec_.type_ == 'p')
+      return write_pointer(value.value);
     writer_.write_str(value, spec_);
+  }
+
+  void visit_stdstring(const std::string& value) {
+    Arg::StringValue<char> arg = {value.c_str(),value.size()};
+    visit_string(arg);
+  }
+
+  void visit_stdwstring(const std::wstring& value) {
+    Arg::StringValue<wchar_t> arg = {value.c_str(),value.size()};
+    visit_wstring(arg);
   }
 
   void visit_pointer(const void *value) {
@@ -2215,11 +2374,12 @@ class BasicFormatter : private internal::FormatterBase {
 # define FMT_GEN15(f) FMT_GEN14(f), f(14)
 
 namespace internal {
+template <typename Char>
 inline uint64_t make_type() { return 0; }
 
-template <typename T>
+template <typename Char,typename T>
 inline uint64_t make_type(const T &arg) {
-  return MakeValue< BasicFormatter<char> >::type(arg);
+  return MakeValue< BasicFormatter<Char> >::type(arg);
 }
 
 template <std::size_t N, bool/*IsPacked*/= (N < ArgList::MAX_PACKED_ARGS)>
@@ -2228,17 +2388,17 @@ struct ArgArray;
 template <std::size_t N>
 struct ArgArray<N, true/*IsPacked*/> {
   typedef Value Type[N > 0 ? N : 1];
-
+  
   template <typename Formatter, typename T>
   static Value make(const T &value) {
 #ifdef __clang__
-    Value result = MakeValue<Formatter>(value);
+    Value result = MakeValue<Formatter>::MakeValueHelper(value);
     // Workaround a bug in Apple LLVM version 4.2 (clang-425.0.28) of clang:
     // https://github.com/fmtlib/fmt/issues/276
     (void)result.custom.format;
     return result;
 #else
-    return MakeValue<Formatter>(value);
+    return MakeValue<Formatter>::MakeValueHelper(value);
 #endif
   }
 };
@@ -2252,24 +2412,25 @@ struct ArgArray<N, false/*IsPacked*/> {
 };
 
 #if FMT_USE_VARIADIC_TEMPLATES
-template <typename Arg, typename... Args>
+template <typename Char, typename Arg, typename... Args>
 inline uint64_t make_type(const Arg &first, const Args & ... tail) {
-  return make_type(first) | (make_type(tail...) << 4);
+  return make_type<Char>(first) | (make_type<Char>(tail...) << 4);
 }
 
 #else
-
+template<class CharType>
 struct ArgType {
   uint64_t type;
 
   ArgType() : type(0) {}
 
   template <typename T>
-  ArgType(const T &arg) : type(make_type(arg)) {}
+  ArgType(const T &arg) : type(make_type<CharType>(arg)) {}
 };
 
-# define FMT_ARG_TYPE_DEFAULT(n) ArgType t##n = ArgType()
+# define FMT_ARG_TYPE_DEFAULT(n) ArgType<Char> t##n = ArgType<Char>()
 
+template <typename Char>
 inline uint64_t make_type(FMT_GEN15(FMT_ARG_TYPE_DEFAULT)) {
   return t0.type | (t1.type << 4) | (t2.type << 8) | (t3.type << 12) |
       (t4.type << 16) | (t5.type << 20) | (t6.type << 24) | (t7.type << 28) |
@@ -2295,7 +2456,7 @@ inline uint64_t make_type(FMT_GEN15(FMT_ARG_TYPE_DEFAULT)) {
     typedef fmt::internal::ArgArray<sizeof...(Args)> ArgArray; \
     typename ArgArray::Type array{ \
       ArgArray::template make<fmt::BasicFormatter<Char> >(args)...}; \
-    func(arg0, fmt::ArgList(fmt::internal::make_type(args...), array)); \
+    func(arg0, fmt::ArgList(fmt::internal::make_type<Char>(args...), array)); \
   }
 
 // Defines a variadic constructor.
@@ -2305,7 +2466,7 @@ inline uint64_t make_type(FMT_GEN15(FMT_ARG_TYPE_DEFAULT)) {
     typedef fmt::internal::ArgArray<sizeof...(Args)> ArgArray; \
     typename ArgArray::Type array{ \
       ArgArray::template make<fmt::BasicFormatter<Char> >(args)...}; \
-    func(arg0, arg1, fmt::ArgList(fmt::internal::make_type(args...), array)); \
+    func(arg0, arg1, fmt::ArgList(fmt::internal::make_type<Char>(args...), array)); \
   }
 
 #else
@@ -2321,7 +2482,7 @@ inline uint64_t make_type(FMT_GEN15(FMT_ARG_TYPE_DEFAULT)) {
   inline void func(arg_type arg1, FMT_GEN(n, FMT_MAKE_ARG)) { \
     const fmt::internal::ArgArray<n>::Type array = {FMT_GEN(n, FMT_MAKE_REF)}; \
     func(arg1, fmt::ArgList( \
-      fmt::internal::make_type(FMT_GEN(n, FMT_MAKE_REF2)), array)); \
+      fmt::internal::make_type<Char>(FMT_GEN(n, FMT_MAKE_REF2)), array)); \
   }
 
 // Emulates a variadic function returning void on a pre-C++11 compiler.
@@ -2338,7 +2499,7 @@ inline uint64_t make_type(FMT_GEN15(FMT_ARG_TYPE_DEFAULT)) {
   ctor(arg0_type arg0, arg1_type arg1, FMT_GEN(n, FMT_MAKE_ARG)) { \
     const fmt::internal::ArgArray<n>::Type array = {FMT_GEN(n, FMT_MAKE_REF)}; \
     func(arg0, arg1, fmt::ArgList( \
-      fmt::internal::make_type(FMT_GEN(n, FMT_MAKE_REF2)), array)); \
+      fmt::internal::make_type<Char>(FMT_GEN(n, FMT_MAKE_REF2)), array)); \
   }
 
 // Emulates a variadic constructor on a pre-C++11 compiler.
@@ -2461,6 +2622,12 @@ FMT_API void format_system_error(fmt::Writer &out, int error_code,
  */
 template <typename Char>
 class BasicWriter {
+  template <class CharType, class CharModeType, class T = CharType>
+  using FilterModeType = 
+    typename internal::Conditional < 
+    internal::IsSame < CharModeType, Char >::value ,
+    T, typename internal::CharMode<CharType,CharModeType,T >::NullType > ::type;
+
  private:
   // Output buffer.
   Buffer<Char> &buffer_;
@@ -2539,14 +2706,6 @@ class BasicWriter {
   template <typename StrChar, typename Spec>
   void write_str(const internal::Arg::StringValue<StrChar> &str,
                  const Spec &spec);
-
-  // This following methods are private to disallow writing wide characters
-  // and strings to a char stream. If you want to print a wide string as a
-  // pointer as std::ostream does, cast it to const void*.
-  // Do not implement!
-  void operator<<(typename internal::WCharHelper<wchar_t, Char>::Unsupported);
-  void operator<<(
-      typename internal::WCharHelper<const wchar_t *, Char>::Unsupported);
 
   // Appends floating-point length specifier to the format string.
   // The second argument is only used for overload resolution.
@@ -2690,11 +2849,17 @@ class BasicWriter {
     return *this;
   }
 
-  BasicWriter &operator<<(
-      typename internal::WCharHelper<wchar_t, Char>::Supported value) {
+  BasicWriter &operator<<(typename FilterModeType<wchar_t, wchar_t> value) {
     buffer_.push_back(value);
     return *this;
   }
+#if FMT_MSC_VER
+  BasicWriter &operator<<(typename FilterModeType<wchar_t,char> value) {
+    std::string mbs = fmt::convert(WStringRef(&value, 1));
+    buffer_.append(mbs.c_str(), mbs.c_str() + mbs.size());
+    return *this;
+  }
+#endif
 
   /**
     \rst
@@ -2707,10 +2872,30 @@ class BasicWriter {
     return *this;
   }
 
-  BasicWriter &operator<<(
-      typename internal::WCharHelper<StringRef, Char>::Supported value) {
-    const char *str = value.data();
-    buffer_.append(str, str + value.size());
+#if FMT_MSC_VER
+  BasicWriter &operator<<(typename FilterModeType<wchar_t, char, fmt::BasicStringRef<wchar_t> > value) {
+    std::string mbs = fmt::convert(WStringRef(value.data(), value.size()));
+    buffer_.append(mbs.c_str(), mbs.c_str() + mbs.size());
+    return *this;
+  }
+
+  BasicWriter &operator<<(typename FilterModeType<char, wchar_t, fmt::BasicStringRef<char> > value) {
+    std::wstring wcs = fmt::convert(StringRef(value.data(), value.size()));
+    buffer_.append(wcs.c_str(), wcs.c_str() + wcs.size());
+    return *this;
+  }
+#endif
+
+  //for no char/wchar_t type, treats as const void*
+  template <typename T>
+  typename internal::EnableIf<
+      !internal::IsSame<typename internal::RemoveCV<T>::type, char>::value
+      && !internal::IsSame<typename internal::RemoveCV<T>::type, wchar_t>::value,
+  BasicWriter&>::type operator<<(T* what) {
+    FormatSpec spec_;
+    spec_.flags_ = HASH_FLAG;
+    spec_.type_ = 'x';
+    write_int(reinterpret_cast<uintptr_t>(what), spec_);
     return *this;
   }
 
@@ -2756,6 +2941,14 @@ typename BasicWriter<Char>::CharPtr BasicWriter<Char>::write_str(
   return out;
 }
 
+template<typename T>
+size_t string_len(const T*);
+template<> inline size_t string_len<char>(const char* str) {
+  return strlen(str);
+}
+template<> inline size_t string_len<wchar_t>(const wchar_t* str) {
+  return wcslen(str);
+}
 template <typename Char>
 template <typename StrChar, typename Spec>
 void BasicWriter<Char>::write_str(
@@ -2770,6 +2963,7 @@ void BasicWriter<Char>::write_str(
     if (!str_value) {
       FMT_THROW(FormatError("string pointer is null"));
     }
+//     str_size = string_len(str_value);
   }
   std::size_t precision = static_cast<std::size_t>(spec.precision_);
   if (spec.precision_ >= 0 && precision < str_size)
@@ -3498,7 +3692,7 @@ void arg(WStringRef, const internal::NamedArg<Char>&) FMT_DELETED_OR_UNDEFINED;
     typename ArgArray::Type array{ \
       ArgArray::template make<fmt::BasicFormatter<Char> >(args)...}; \
     call(FMT_FOR_EACH(FMT_GET_ARG_NAME, __VA_ARGS__), \
-      fmt::ArgList(fmt::internal::make_type(args...), array)); \
+      fmt::ArgList(fmt::internal::make_type<Char>(args...), array)); \
   }
 #else
 // Defines a wrapper for a function taking __VA_ARGS__ arguments
@@ -3510,7 +3704,7 @@ void arg(WStringRef, const internal::NamedArg<Char>&) FMT_DELETED_OR_UNDEFINED;
     fmt::internal::ArgArray<n>::Type arr; \
     FMT_GEN(n, FMT_ASSIGN_##Char); \
     call(FMT_FOR_EACH(FMT_GET_ARG_NAME, __VA_ARGS__), fmt::ArgList( \
-      fmt::internal::make_type(FMT_GEN(n, FMT_MAKE_REF2)), arr)); \
+      fmt::internal::make_type<Char>(FMT_GEN(n, FMT_MAKE_REF2)), arr)); \
   }
 
 # define FMT_VARIADIC_(Char, ReturnType, func, call, ...) \

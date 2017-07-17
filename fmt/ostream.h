@@ -96,6 +96,11 @@ void format_arg(BasicFormatter<Char, ArgFormatter_> &f,
  */
 FMT_API void print(std::ostream &os, CStringRef format_str, ArgList args);
 FMT_VARIADIC(void, print, std::ostream &, CStringRef)
+
+FMT_API void format(std::ostream &os, CStringRef format_str, ArgList args);
+FMT_VARIADIC(void, format, std::ostream &, CStringRef)
+FMT_API void format(std::wostream &os, WCStringRef format_str, ArgList args);
+FMT_VARIADIC_W(void, format, std::wostream &, WCStringRef)
 }  // namespace fmt
 
 #ifdef FMT_HEADER_ONLY

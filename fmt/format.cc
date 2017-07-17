@@ -295,6 +295,23 @@ FMT_FUNC void internal::report_unknown_type(char code, const char *type) {
         static_cast<unsigned>(code), type)));
 }
 
+#if FMT_MSC_VER
+FMT_FUNC std::wstring convert(StringRef s, long codepage) FMT_NOEXCEPT {
+  std::wstring wcs;
+  int len = MultiByteToWideChar(codepage, 0, s.data(), static_cast<int>(s.size()), NULL, NULL);
+  wcs.resize(len);
+  MultiByteToWideChar(codepage, 0, s.data(), static_cast<int>(s.size()), &wcs[0], len);
+  return wcs;
+}
+FMT_FUNC std::string convert(WStringRef s, long codepage) FMT_NOEXCEPT {
+  std::string mbs;
+  int len = WideCharToMultiByte(codepage, 0, s.data(), static_cast<int>(s.size()), NULL, 0, NULL, NULL);
+  mbs.resize(len);
+  WideCharToMultiByte(codepage, 0, s.data(), static_cast<int>(s.size()), &mbs[0], len, NULL, NULL);
+  return mbs;
+}
+#endif
+
 #if FMT_USE_WINDOWS_H
 
 FMT_FUNC internal::UTF8ToUTF16::UTF8ToUTF16(StringRef s) {

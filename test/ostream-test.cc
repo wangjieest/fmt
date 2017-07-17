@@ -121,6 +121,12 @@ TEST(OStreamTest, Print) {
   EXPECT_EQ("Don't panic!", os.str());
 }
 
+TEST(OStreamTest, BasicStreamFormat) {
+    std::ostringstream os;
+    fmt::format(os, "Don't {}!", "panic");
+    EXPECT_EQ("Don't panic!", os.str());
+}
+
 TEST(OStreamTest, WriteToOStream) {
   std::ostringstream os;
   fmt::MemoryWriter w;
