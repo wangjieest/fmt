@@ -40,7 +40,7 @@ class BasicStreamBuffer : public Buffer<Char> {
   Char data_[N];
   std::basic_ostream<Char> & stream_;
  protected:
-  virtual void grow(std::size_t size) FMT_OVERRIDE {
+  virtual void grow(std::size_t /*size*/) FMT_OVERRIDE {
     reset();
   }
   void reset() FMT_NOEXCEPT {
