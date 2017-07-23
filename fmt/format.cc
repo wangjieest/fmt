@@ -297,17 +297,21 @@ FMT_FUNC void internal::report_unknown_type(char code, const char *type) {
 
 #if FMT_MSC_VER
 FMT_FUNC std::wstring convert(StringRef s, long codepage) FMT_NOEXCEPT {
-  std::wstring wcs;
-  int len = MultiByteToWideChar(codepage, 0, s.data(), static_cast<int>(s.size()), NULL, NULL);
-  wcs.resize(len);
-  MultiByteToWideChar(codepage, 0, s.data(), static_cast<int>(s.size()), &wcs[0], len);
+  std::wstring wcs = L"(null)";
+  if (s.data()) {
+    int len = MultiByteToWideChar(codepage, 0, s.data(), static_cast<int>(s.size()), NULL, NULL);
+    wcs.resize(len);
+    MultiByteToWideChar(codepage, 0, s.data(), static_cast<int>(s.size()), &wcs[0], len);
+  }
   return wcs;
 }
 FMT_FUNC std::string convert(WStringRef s, long codepage) FMT_NOEXCEPT {
-  std::string mbs;
-  int len = WideCharToMultiByte(codepage, 0, s.data(), static_cast<int>(s.size()), NULL, 0, NULL, NULL);
-  mbs.resize(len);
-  WideCharToMultiByte(codepage, 0, s.data(), static_cast<int>(s.size()), &mbs[0], len, NULL, NULL);
+  std::string mbs = "(null)";
+  if (s.data()) {
+    int len = WideCharToMultiByte(codepage, 0, s.data(), static_cast<int>(s.size()), NULL, 0, NULL, NULL);
+    mbs.resize(len);
+    WideCharToMultiByte(codepage, 0, s.data(), static_cast<int>(s.size()), &mbs[0], len, NULL, NULL);
+  }
   return mbs;
 }
 #endif

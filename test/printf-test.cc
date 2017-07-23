@@ -443,6 +443,8 @@ TEST(PrintfTest, String) {
   EXPECT_PRINTF("(null)", "%s", null_str);
   EXPECT_PRINTF("    (null)", "%10s", null_str);
   // TODO: wide string
+  EXPECT_EQ(L"abc", fmt::sprintf(L"%s", "abc"));
+  EXPECT_EQ(L"(null)", fmt::sprintf(L"%s", null_str));
 }
 
 TEST(PrintfTest, Pointer) {

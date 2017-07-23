@@ -291,26 +291,26 @@ class BasicPrintfArgFormatter :
   }
 
   void visit_string(Arg::StringValue<char> value) {
-      if (this->spec().type_ == 'p')
-          return value.value ? Base::visit_pointer(value.value) : write_null_pointer();
-      return value.value ? Base::visit_string(value) : this->write("(null)");
+    if (this->spec().type_ == 'p')
+      return value.value ? Base::visit_pointer(value.value) : write_null_pointer();
+    return value.value ? Base::visit_string(value) : this->write("(null)");
   }
 
   using ArgVisitor<Impl, void>::visit_wstring;
   void visit_wstring(Arg::StringValue<Char> value) {
-      if (this->spec().type_ == 'p')
-          return value.value ? Base::visit_pointer(value.value) : write_null_pointer();
-      return value.value ? Base::visit_wstring(value) : this->write("(null)");
+    if (this->spec().type_ == 'p')
+      return value.value ? Base::visit_pointer(value.value) : write_null_pointer();
+    return value.value ? Base::visit_wstring(value) : this->write("(null)");
   }
 
   void visit_stdstring(const std::string& value) {
-      Arg::StringValue<char> arg = { value.c_str(),value.size() };
-      visit_string(arg);
+    Arg::StringValue<char> arg = { value.c_str(),value.size() };
+    visit_string(arg);
   }
 
   void visit_stdwstring(const std::wstring& value) {
-      Arg::StringValue<wchar_t> arg = { value.c_str(),value.size() };
-      visit_wstring(arg);
+    Arg::StringValue<wchar_t> arg = { value.c_str(),value.size() };
+    visit_wstring(arg);
   }
 
   /** Formats an argument of a custom (user-defined) type. */
