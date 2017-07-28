@@ -104,7 +104,11 @@ typedef __int64          intmax_t;
 #else
 # define FMT_GCC_VERSION 0
 # define FMT_GCC_EXTENSION
+#if FMT_MSC_VER && FMT_MSC_VER >= 1800
+# define FMT_HAS_GXX_CXX11 1
+#else
 # define FMT_HAS_GXX_CXX11 0
+#endif
 #endif
 
 #if defined(__INTEL_COMPILER)
@@ -140,6 +144,17 @@ typedef __int64          intmax_t;
 # define FMT_HAS_CPP_ATTRIBUTE(x) __has_cpp_attribute(x)
 #else
 # define FMT_HAS_CPP_ATTRIBUTE(x) 0
+#endif
+
+// Use the compiler's attribute noreturn
+#if defined(__MINGW32__) || defined(__MINGW64__)
+# define FMT_NORETURN __attribute__((noreturn))
+#elif FMT_HAS_CPP_ATTRIBUTE(noreturn)
+# define FMT_NORETURN [[noreturn]]
+#elif FMT_MSC_VER
+# define FMT_NORETURN __declspec(noreturn)
+#else
+# define FMT_NORETURN
 #endif
 
 #ifndef FMT_USE_VARIADIC_TEMPLATES
@@ -932,7 +947,7 @@ struct IntTraits {
     TypeSelector<std::numeric_limits<T>::digits <= 32>::Type MainType;
 };
 
-FMT_API void report_unknown_type(char code, const char *type);
+FMT_API FMT_NORETURN void report_unknown_type(char code, const char *type);
 
 // Static data is placed in this class template to allow header-only
 // configuration.
@@ -1334,9 +1349,9 @@ inline fmt::StringRef thousands_sep(...) { return ""; }
   typedef int FMT_CONCAT_(Assert, __LINE__)[(cond) ? 1 : -1] FMT_UNUSED
 #endif
 
-template <typename Formatter, typename Char, typename T>
-void format_arg(Formatter &, const Char *, const T &) {
-  FMT_STATIC_ASSERT(FalseType<T>::value,
+template <typename Formatter>
+void format_arg(Formatter&, ...) {
+  FMT_STATIC_ASSERT(FalseType<Formatter>::value,
                     "Cannot format argument. To enable the use of ostream "
                     "operator<< include fmt/ostream.h. Otherwise provide "
                     "an overload of format_arg.");
